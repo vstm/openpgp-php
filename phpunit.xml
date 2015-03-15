@@ -1,7 +1,8 @@
-<phpunit>
+<phpunit bootstrap="vendor/autoload.php">
   <testsuites>
     <testsuite name="Serialization">
       <file>tests/suite.php</file>
+      <file>tests/cleartextsignature.php</file>
     </testsuite>
 
     <testsuite name="Fingerprint">

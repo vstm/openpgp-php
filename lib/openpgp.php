@@ -63,6 +63,93 @@ class OpenPGP {
   }
 
   /**
+   * @see http://tools.ietf.org/html/rfc4880#section-7.1
+   */
+  static function dashed_unescape($escaped) {
+      return preg_replace('/^- -/m', '-', $escaped);
+  }
+
+  /**
+   * @see http://tools.ietf.org/html/rfc4880#section-7.1
+   */
+  static function dashed_escape($clear) {
+      return preg_replace('/^-/m', '- -', $clear);
+  }
+
+  static function cleartext_signature_parse($cleartext) {
+      $start_packet_marker = self::header('PGP SIGNED MESSAGE');
+      $start_signature_marker = self::header('PGP SIGNATURE');
+      $end_signature_marker = self::footer('PGP SIGNATURE');
+
+
+      $cleartext_start = strpos($cleartext, $start_packet_marker);
+      if($cleartext_start === false) {
+          return false;
+      }
+
+      $cleartext_start += strlen($start_packet_marker);
+      $cleartext_start += strspn($cleartext, "\r\n", $cleartext_start);
+
+      $signature_end = strrpos($cleartext, $end_signature_marker);
+
+      if($signature_end === false) {
+          return false;
+      }
+
+      $signature_start = strrpos($cleartext, $start_signature_marker);
+
+      if($signature_start === false) {
+          return false;
+      }
+
+      $body_end  = $signature_start;
+      $signature_start += strlen($start_signature_marker);
+      $signature_start += strspn($cleartext, "\r\n", $signature_start);
+
+      $cleartext_header_len = self::get_header_length($cleartext, $cleartext_start);
+      $signature_header_len = self::get_header_length($cleartext, $signature_start);
+
+      $message_head = substr($cleartext, $cleartext_start, $cleartext_header_len);
+      $body = substr($cleartext, $cleartext_start + $cleartext_header_len, $body_end - ($cleartext_start + $cleartext_header_len));
+
+      $signature_head = substr($cleartext, $signature_start, $signature_header_len);
+      $signature_body = substr($cleartext, $signature_start + $signature_header_len, $signature_end - ($signature_start + $signature_header_len));
+
+      $signature_raw = base64_decode($signature_body);
+      $signature = OpenPGP_SignaturePacket::parse($signature_raw);
+
+      return new OpenPGP_Message(array(
+          new OpenPGP_LiteralDataPacket(self::dashed_unescape($body)),
+          $signature
+      ));
+
+      //var_dump($message_head, $body, $signature_head, $signature_body, $signature);
+  }
+
+  static function get_header_length($text, $offset = 0) {
+      $header_len = 0;
+
+      $read_header = true;
+      while($read_header) {
+          $line_len = strcspn($text, "\r\n", $offset + $header_len);
+          if($line_len === 0) {
+              $read_header = false;
+          } else {
+              $header_len += $line_len;
+          }
+
+          $nlstart = $offset + $header_len;
+          if($text[$nlstart] === "\r" && $text[$nlstart + 1] === "\n") {
+              $header_len += 2;
+          } else {
+              $header_len += 1;
+          }
+      }
+
+      return $header_len;
+  }
+
+  /**
    * @see http://tools.ietf.org/html/rfc4880#section-6
    * @see http://tools.ietf.org/html/rfc4880#section-6.1
    */

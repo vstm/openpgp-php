@@ -77,53 +77,107 @@ class OpenPGP {
   }
 
   static function cleartext_signature_parse($cleartext) {
-    $start_packet_marker = self::header('PGP SIGNED MESSAGE');
-    $start_signature_marker = self::header('PGP SIGNATURE');
-    $end_signature_marker = self::footer('PGP SIGNATURE');
+    $cleartext_start = self::find_header_pos($cleartext, 'PGP SIGNED MESSAGE', 0);
 
-
-    $cleartext_start = strpos($cleartext, $start_packet_marker);
     if ($cleartext_start === false) {
       return false;
     }
 
-    $cleartext_start += strlen($start_packet_marker);
-    $cleartext_start += strspn($cleartext, "\r\n", $cleartext_start);
-
-    $signature_end = strrpos($cleartext, $end_signature_marker);
-
-    if ($signature_end === false) {
-      return false;
-    }
-
-    $signature_start = strrpos($cleartext, $start_signature_marker);
+    $signature_start = self::find_header_pos($cleartext, 'PGP SIGNATURE', $cleartext_start['end']);
 
     if ($signature_start === false) {
       return false;
     }
 
-    $body_end = $signature_start;
-    $signature_start += strlen($start_signature_marker);
-    $signature_start += strspn($cleartext, "\r\n", $signature_start);
+    $signature_end = self::find_footer_pos($cleartext, 'PGP SIGNATURE', $signature_start['end']);
 
-    $cleartext_header_len = self::get_header_length($cleartext, $cleartext_start);
-    $signature_header_len = self::get_header_length($cleartext, $signature_start);
+    if ($signature_end === false) {
+      return false;
+    }
 
-    $message_head = substr($cleartext, $cleartext_start, $cleartext_header_len);
-    $body = substr($cleartext, $cleartext_start + $cleartext_header_len, $body_end - ($cleartext_start + $cleartext_header_len));
+    list (, $cleartext_content) =
+      self::extract_header_and_content($cleartext, $cleartext_start['end'], $signature_start['start']);
 
-    $signature_head = substr($cleartext, $signature_start, $signature_header_len);
-    $signature_body = substr($cleartext, $signature_start + $signature_header_len, $signature_end - ($signature_start + $signature_header_len));
+    list (, $signature_content) =
+      self::extract_header_and_content($cleartext, $signature_start['end'], $signature_end['start']);
 
-    $signature_raw = base64_decode($signature_body);
+
+    $signature_raw = base64_decode($signature_content);
     $signature = OpenPGP_SignaturePacket::parse($signature_raw);
 
     return new OpenPGP_Message(array(
-      new OpenPGP_LiteralDataPacket(self::dashed_unescape($body)),
+      new OpenPGP_LiteralDataPacket(self::dashed_unescape($cleartext_content)),
       $signature
     ));
+  }
 
-    //var_dump($message_head, $body, $signature_head, $signature_body, $signature);
+  static function extract_header_and_content($haystack, $start, $end) {
+    $header_length = self::get_header_length($haystack, $start);
+
+    $content_length = $end - ($start + $header_length);
+
+    $header = substr($haystack, $start, $header_length);
+    $content = substr($haystack, $start + $header_length, $content_length);
+
+    return array($header, $content);
+  }
+
+  static function find_header_pos($haystack, $header, $offset = 0) {
+    return self::find_marker_pos($haystack, self::header($header), $offset);
+  }
+
+  static function find_footer_pos($haystack, $footer, $offset = 0) {
+    return self::find_marker_pos($haystack, self::footer($footer), $offset);
+  }
+
+  static function find_marker_pos($haystack, $marker, $offset = 0) {
+    $marker_len = strlen($marker);
+
+    $found_header = false;
+    while(!$found_header) {
+      $start = strpos($haystack, $marker, $offset);
+
+      if($start === false) {
+        return false;
+      }
+
+      $end = $start + $marker_len;
+
+      // Is the header at the beginning of haystack or does it start
+      // with a newline? If not, this is no header and we continue the
+      // search.
+      if($start === 0) {
+        $found_header = true;
+      } elseif($start > 1 && substr($haystack, $start - 2, 2) === "\r\n") {
+        $start -= 2;
+        $found_header = true;
+      } elseif($start > 0 && strpos("\r\n", substr($haystack, $start -1, 1)) !== false) {
+        $start -= 1;
+        $found_header = true;
+      } else {
+        $offset = $end;
+      }
+
+      if($found_header) {
+        // Does the header end at the end of the haystack or does it
+        // end with a newline? If not, keep searching.
+        if($end === strlen($haystack)) {
+          // The header does not end with a newsline but with "end of file/data".
+          // We allow this, and we don't have to adjust the end-pointer.
+          // Do nothing!
+        } elseif(substr($haystack, $end, 2) === "\r\n") {
+          $end += 2;
+        } elseif(strpos("\r\n", substr($haystack, $end, 1)) !== false) {
+          $end += 1;
+        } else {
+          // Does not end with newline or end-of-file, so we haven't found
+          // a header yet.
+          $found_header = false;
+        }
+      }
+    }
+
+    return array('start' => $start, 'end' => $end);
   }
 
   static function get_header_length($text, $offset = 0) {
